@@ -28,7 +28,8 @@ TOKEN_OR_SEPARATOR = r"\s\|\|\s"
 
 SKIP_IF = 'skip-if = '
 WPT_IF = 'if '
-WPT_MANIFEST_SUBCATEGORIES = ['expected:', 'disabled:', 'fuzzy:']
+WPT_PREFS = 'prefs:'
+WPT_MANIFEST_SUBCATEGORIES = [r'expected:', r'disabled:', r'fuzzy:']
 
 
 def process_manifest_line(line):
@@ -74,32 +75,77 @@ def process_web_platform_manifests(root, file_name, regex):
         manifest_contents = manifest_file.readlines()
 
     user_expression = re.compile(regex)
-    wpt_subcategory_expressions = [re.compile(
-        pattern) for pattern in WPT_MANIFEST_SUBCATEGORIES]
     matches = [user_expression.search(line) for line in manifest_contents]
-    updated_manifest_contents = []
-    for index, line in enumerate(manifest_contents):
-        if not matches[index]:
-            updated_manifest_contents.append(line)
-        else:
-            previous_line = updated_manifest_contents[index-1]
-            wpt_subcategory_match = any([
-                wpt_expression.search(previous_line) for wpt_expression in wpt_subcategory_expressions
-            ])
-            if wpt_subcategory_match:
-                updated_manifest_contents.pop(index-1)
 
-    if updated_manifest_contents != manifest_contents:
-        empty_manifest = all([
-            re.compile(WPT_IF).search(line.strip()) is None for line in updated_manifest_contents
-        ])
-        if empty_manifest:
-            os.remove(os.path.join(root, file_name))
-            return
+    # filter out lines that match the user-supplied regex
+    updated_manifest_contents = [line for line, match in zip(manifest_contents, matches) if match is None]
 
+    # remove dangling statements such as expected, disabled
+    updated_manifest_contents = remove_dangling_statements(updated_manifest_contents)
+
+    updated_manifest_contents = check_one_newline_at_end(updated_manifest_contents)
+
+    if not check_if_empty_manifest(updated_manifest_contents):
         with open(os.path.join(root, file_name), 'w+') as manifest_file:
             for line in updated_manifest_contents:
                 manifest_file.write(line)
+    else:
+        os.remove(os.path.join(root, file_name))
+
+
+def remove_dangling_statements(manifest):
+    updated_manifest = []
+
+    def line_is_wpt_substatement(line):
+        wpt_subcategory_expressions = [re.compile(
+            pattern + r"\n(\s)?") for pattern in WPT_MANIFEST_SUBCATEGORIES]
+        return any([expression.search(line) for expression in wpt_subcategory_expressions])
+
+    def line_is_if_statement(line):
+        return bool(re.search(WPT_IF, line))
+
+    def line_is_test_statement(line):
+        return line.strip().startswith('[') and line.strip().endswith(']')
+
+    previous_line = None
+    for line in manifest:
+        if previous_line is not None:
+            if line.strip() == '' and line_is_wpt_substatement(previous_line):
+                pass
+
+            if line_is_wpt_substatement(previous_line) and not (line_is_test_statement(line) or line_is_if_statement(line)):
+                updated_manifest.pop(-1)
+
+        updated_manifest.append(line)
+        previous_line = line
+
+    return updated_manifest
+
+
+def check_if_empty_manifest(manifest):
+    no_statements = all([
+        re.search(WPT_IF, line.strip()) is None for line in manifest])
+    no_prefs = all([
+        re.search(WPT_PREFS, line.strip()) is None for line in manifest])
+    no_catchall = all([
+        re.search(pattern + r'\s[A-Z]{3,}', line) for pattern in WPT_MANIFEST_SUBCATEGORIES for line in manifest
+    ])
+    if no_statements and no_prefs and no_catchall:
+        return True
+    return False
+
+
+def check_one_newline_at_end(manifest):
+    last_line = manifest[-1]
+    second_last_line = manifest[-2]
+
+    if last_line == '\n' and second_last_line == '\n':
+        manifest.pop(-1)
+    elif last_line == '\n' and second_last_line != '\n':
+        pass
+    else:
+        manifest.append('\n')
+    return manifest
 
 
 def walk_and_discover_manifest_files(path, wpt, regex):
