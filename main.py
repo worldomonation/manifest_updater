@@ -69,6 +69,14 @@ def process_manifest(root, file_name):
             else:
                 sys.stdout.write(line.rstrip() + '\n')
 
+    with open(os.path.join(root, file_name), 'r') as f:
+        new_file = f.read()
+    with open(os.path.join(root, file_name, '.bak'), 'r') as f:
+        original_file = f.read()
+
+    if new_file == original_file:
+        os.remove(os.path.join(root, file_name, '.bak'))
+
 
 def process_web_platform_manifests(root, file_name, regex):
     with open(os.path.join(root, file_name), 'r') as manifest_file:
@@ -83,8 +91,11 @@ def process_web_platform_manifests(root, file_name, regex):
     # remove dangling statements such as expected, disabled
     updated_manifest_contents = remove_dangling_statements(updated_manifest_contents)
 
+    # ensure file terminates with a newline
     updated_manifest_contents = check_one_newline_at_end(updated_manifest_contents)
 
+    # if resulting manifest is empty, remove the file.
+    # otherwise, overwrite the old manifest.
     if not check_if_empty_manifest(updated_manifest_contents):
         with open(os.path.join(root, file_name), 'w+') as manifest_file:
             for line in updated_manifest_contents:
