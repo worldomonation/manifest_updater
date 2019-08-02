@@ -107,7 +107,18 @@ def process_web_platform_manifests(root, file_name, regex):
 def remove_dangling_statements(manifest):
     updated_manifest = []
 
-    def line_is_wpt_substatement(line):
+    def line_is_clean_wpt_substatement(line):
+        """In this case, 'clean' refers to a subtatement that is by itself, like so:
+        disabled:
+            <statement>
+
+        An 'unclean' substatement, which will not match and therefore return False, would be:
+        disabled: https://bugzilla.mozilla.org/...
+
+        or
+
+        expected: FAIL
+        """
         wpt_subcategory_expressions = [re.compile(
             pattern + r"\n(\s)?") for pattern in WPT_MANIFEST_SUBCATEGORIES]
         return any([expression.search(line) for expression in wpt_subcategory_expressions])
@@ -120,12 +131,24 @@ def remove_dangling_statements(manifest):
 
     previous_line = None
     for line in manifest:
-        if previous_line is not None:
-            if line.strip() == '' and line_is_wpt_substatement(previous_line):
-                pass
-
-            if line_is_wpt_substatement(previous_line) and not (line_is_test_statement(line) or line_is_if_statement(line)):
-                updated_manifest.pop(-1)
+        if previous_line:
+            # lookback is a substatement (expected, disabled, etc)
+            if line_is_clean_wpt_substatement(previous_line):
+                if line_is_test_statement(line):
+                    """substatement cannot be followed by a test statement
+                    disabled:
+                    [this-is-a-subtest]
+                    """
+                    updated_manifest.pop(-1)
+                    updated_manifest.append('\n')
+                elif line_is_clean_wpt_substatement(line):
+                    """substatement cannot be followed by another substatement
+                    disabled:
+                    expected:
+                    """
+                    updated_manifest.pop(-1)
+                else:
+                    pass
 
         updated_manifest.append(line)
         previous_line = line
@@ -134,10 +157,16 @@ def remove_dangling_statements(manifest):
 
 
 def check_if_empty_manifest(manifest):
+    """Checks for three conditions of an empty manifest.
+
+    By empty, it refers to a manifest that may not serve any purpose, or invalid.
+    """
     no_statements = all([
         re.search(WPT_IF, line.strip()) is None for line in manifest])
     no_prefs = all([
         re.search(WPT_PREFS, line.strip()) is None for line in manifest])
+    # catchall in this case refers to a substatement in the form of expected: FAIL,
+    # so named due to the catch-all nature of the condition.
     no_catchall = all([
         re.search(pattern + r'\s[A-Z]{3,}', line) for pattern in WPT_MANIFEST_SUBCATEGORIES for line in manifest
     ])
