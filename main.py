@@ -15,10 +15,8 @@ from fileinput import FileInput
 MANIFEST_FILE_NAMES = [
     'mochitest.ini',
     'browser.ini',
+    'robocop.ini',
 ]
-
-BASIC_ANDROID_VERSION_REGEX = r"[(]?android_version == '17'[)]?"
-ANDROID_VERSION = re.compile(BASIC_ANDROID_VERSION_REGEX)
 
 # SKIP_IF_GRAMMAR = r"^skip-if = .*(&&|==|<|>)+.* (#\s.*)?$"
 # TOKEN_GRAMMAR = r"^.*(&&|==|<|>|!=|<=|>=)\s.*$"
@@ -42,7 +40,7 @@ def process_manifest_line(line):
     line = line[len(SKIP_IF):]
     tokens = re.split(TOKEN_OR_SEPARATOR, line)
     tokens_with_matching_versions_removed = [
-        token for token in tokens if not ANDROID_VERSION.match(token)]
+        token for token in tokens if not re.compile(ANDROID_VERSION).match(token)]
     if tokens_with_matching_versions_removed:
         if len(tokens_with_matching_versions_removed) > 1:
             tokens = ' || '.join(tokens_with_matching_versions_removed)
@@ -71,37 +69,41 @@ def process_manifest(root, file_name):
 
     with open(os.path.join(root, file_name), 'r') as f:
         new_file = f.read()
-    with open(os.path.join(root, file_name, '.bak'), 'r') as f:
+    with open(os.path.join(root, file_name) + '.bak', 'r') as f:
         original_file = f.read()
 
     if new_file == original_file:
-        os.remove(os.path.join(root, file_name, '.bak'))
+        os.remove(os.path.join(root, file_name) + '.bak')
 
 
 def process_web_platform_manifests(root, file_name, regex):
     with open(os.path.join(root, file_name), 'r') as manifest_file:
         manifest_contents = manifest_file.readlines()
 
-    user_expression = re.compile(regex)
-    matches = [user_expression.search(line) for line in manifest_contents]
+    user_regex = re.compile(regex)
+    matches = [user_regex.search(line) for line in manifest_contents]
 
-    # filter out lines that match the user-supplied regex
-    updated_manifest_contents = [line for line, match in zip(manifest_contents, matches) if match is None]
+    if any(matches):
+        # filter out lines that match the user-supplied regex
+        updated_manifest_contents = [line for line, match in zip(
+            manifest_contents, matches) if match is None]
 
-    # remove dangling statements such as expected, disabled
-    updated_manifest_contents = remove_dangling_statements(updated_manifest_contents)
+        # remove dangling statements such as expected, disabled
+        updated_manifest_contents = remove_dangling_statements(updated_manifest_contents)
 
-    # ensure file terminates with a newline
-    updated_manifest_contents = check_one_newline_at_end(updated_manifest_contents)
+        # ensure file terminates with a newline
+        updated_manifest_contents = check_one_newline_at_end(updated_manifest_contents)
 
-    # if resulting manifest is empty, remove the file.
-    # otherwise, overwrite the old manifest.
-    if not check_if_empty_manifest(updated_manifest_contents):
-        with open(os.path.join(root, file_name), 'w+') as manifest_file:
-            for line in updated_manifest_contents:
-                manifest_file.write(line)
+        # if resulting manifest is empty, remove the file.
+        # otherwise, overwrite the old manifest.
+        if not check_if_empty_manifest(updated_manifest_contents):
+            with open(os.path.join(root, file_name), 'w+') as manifest_file:
+                for line in updated_manifest_contents:
+                    manifest_file.write(line)
+        else:
+            os.remove(os.path.join(root, file_name))
     else:
-        os.remove(os.path.join(root, file_name))
+        pass
 
 
 def remove_dangling_statements(manifest):
@@ -127,6 +129,8 @@ def remove_dangling_statements(manifest):
         return bool(re.search(WPT_IF, line))
 
     def line_is_test_statement(line):
+        """If the line begins and ends with square brackets, it must be a test statement.
+        """
         return line.strip().startswith('[') and line.strip().endswith(']')
 
     previous_line = None
@@ -176,15 +180,16 @@ def check_if_empty_manifest(manifest):
 
 
 def check_one_newline_at_end(manifest):
-    last_line = manifest[-1]
-    second_last_line = manifest[-2]
+    if len(manifest) > 2:
+        last_line = manifest[-1]
+        second_last_line = manifest[-2]
 
-    if last_line == '\n' and second_last_line == '\n':
-        manifest.pop(-1)
-    elif last_line == '\n' and second_last_line != '\n':
-        pass
-    else:
-        manifest.append('\n')
+        if last_line == '\n' and second_last_line == '\n':
+            manifest.pop(-1)
+        elif last_line == '\n' and second_last_line != '\n':
+            pass
+        else:
+            manifest.append('\n')
     return manifest
 
 
@@ -229,8 +234,7 @@ if __name__ == "__main__":
 
     args, _ = parser.parse_known_args()
 
-    # if args.android_version:
-    #     BASIC_ANDROID_VERSION_REGEX = r"android_version == '{}'".format(
-    #         args.android_version)
+    if args.android_version:
+        ANDROID_VERSION = r"[(]?android_version == '{}'[)]?".format(args.android_version)
 
     walk_and_discover_manifest_files(args.path, args.wpt, args.regex)
